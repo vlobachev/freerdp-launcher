@@ -187,7 +187,9 @@ struct ContentView: View {
 
     private func doLaunch(_ c: Connection, password: String) {
         do {
-            try SessionLauncher.launch(c, password: password)
+            try SessionLauncher.launch(c, password: password) { msg in
+                errorText = msg
+            }
             store.markUsed(c.id)
         } catch {
             errorText = error.localizedDescription

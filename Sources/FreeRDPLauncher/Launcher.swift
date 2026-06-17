@@ -102,8 +102,14 @@ enum SessionLauncher {
         return a
     }
 
+    /// Launch a detached session. If it dies quickly with a non-zero exit
+    /// (auth failure, unreachable host, …), `onEarlyFailure` is called on the
+    /// main thread with a human-readable explanation built from FreeRDP's
+    /// stderr — so the window doesn't just vanish without a word.
     @discardableResult
-    static func launch(_ c: Connection, password: String) throws -> Process {
+    static func launch(_ c: Connection,
+                       password: String,
+                       onEarlyFailure: ((String) -> Void)? = nil) throws -> Process {
         guard let bin = FreeRDPLocator.find() else { throw LaunchError.notInstalled }
 
         let args = arguments(for: c, password: password)
@@ -112,9 +118,28 @@ enum SessionLauncher {
         process.arguments = ["/args-from:stdin"]
 
         let stdin = Pipe()
+        let errPipe = Pipe()
         process.standardInput = stdin
         process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        process.standardError = errPipe
+
+        // Drain stderr continuously (so a long session never blocks on a full
+        // pipe), keeping only the tail for diagnostics.
+        let collector = OutputCollector()
+        errPipe.fileHandleForReading.readabilityHandler = { fh in
+            let d = fh.availableData
+            if !d.isEmpty { collector.append(d) }
+        }
+
+        let started = Date()
+        process.terminationHandler = { proc in
+            errPipe.fileHandleForReading.readabilityHandler = nil
+            guard let onEarlyFailure,
+                  proc.terminationStatus != 0,
+                  Date().timeIntervalSince(started) < 12 else { return }
+            let msg = friendlyError(status: proc.terminationStatus, stderr: collector.text())
+            DispatchQueue.main.async { onEarlyFailure(msg) }
+        }
 
         do {
             try process.run()
@@ -128,5 +153,47 @@ enum SessionLauncher {
         try? stdin.fileHandleForWriting.close()
 
         return process
+    }
+
+    /// Turn a FreeRDP exit code + stderr tail into a short, useful message.
+    static func friendlyError(status: Int32, stderr: String) -> String {
+        let s = stderr.uppercased()
+        var headline = "The remote session closed unexpectedly (exit code \(status))."
+        if s.contains("LOGON_FAILURE") || s.contains("NO_CREDENTIALS")
+            || s.contains("SAM DATABASE") || s.contains("AUTHENTICATION FAILURE") {
+            headline = "Authentication failed — check the username and password."
+        } else if s.contains("MESSAGE ALTERED") || s.contains("MIC ") {
+            headline = "NLA/NTLM negotiation failed — this server needs a FreeRDP client (the macOS Windows App can't connect)."
+        } else if s.contains("TRANSPORT_FAILED") || s.contains("CONNECT_CANCELLED")
+            || s.contains("DNS") || s.contains("CONNECTION RESET") {
+            headline = "Couldn't reach the server — check the host, port, and that it's listening."
+        } else if s.contains("CERTIFICATE") || s.contains("TLS") {
+            headline = "TLS/certificate problem — try enabling “Ignore server certificate (LAN)”."
+        }
+        let tail = stderr
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .suffix(12)
+            .joined(separator: "\n")
+        return tail.isEmpty ? headline : "\(headline)\n\n\(tail)"
+    }
+}
+
+/// Thread-safe, size-capped accumulator for a process's stderr tail.
+private final class OutputCollector {
+    private let lock = NSLock()
+    private var data = Data()
+    private let cap = 16_384
+
+    func append(_ d: Data) {
+        lock.lock(); defer { lock.unlock() }
+        data.append(d)
+        if data.count > cap { data.removeFirst(data.count - cap) }
+    }
+
+    func text() -> String {
+        lock.lock(); defer { lock.unlock() }
+        return String(decoding: data, as: UTF8.self)
     }
 }
