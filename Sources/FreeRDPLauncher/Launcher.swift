@@ -109,14 +109,15 @@ enum SessionLauncher {
         return a
     }
 
-    /// Launch a detached session. If it dies quickly with a non-zero exit
-    /// (auth failure, unreachable host, …), `onEarlyFailure` is called on the
-    /// main thread with a human-readable explanation built from FreeRDP's
-    /// stderr — so the window doesn't just vanish without a word.
+    /// Launch a detached session. On ANY abnormal exit (non-zero status or a
+    /// crash signal) — at any point in the session, not just the first seconds —
+    /// `onExitError` is called on the main thread with a human-readable
+    /// explanation built from FreeRDP's stderr, so the window never just
+    /// vanishes without a word.
     @discardableResult
     static func launch(_ c: Connection,
                        password: String,
-                       onEarlyFailure: ((String) -> Void)? = nil) throws -> Process {
+                       onExitError: ((String) -> Void)? = nil) throws -> Process {
         guard let bin = FreeRDPLocator.find() else { throw LaunchError.notInstalled }
 
         let args = arguments(for: c, password: password)
@@ -124,33 +125,40 @@ enum SessionLauncher {
         process.executableURL = URL(fileURLWithPath: bin)
         process.arguments = ["/args-from:stdin"]
 
+        // Capture stderr to a temp FILE, not an in-process pipe. A pipe whose
+        // reader ever stalls would block FreeRDP on write once the ~64K kernel
+        // buffer fills — which presents as a mid-session "freeze then vanish".
+        // A regular file never blocks the writer, so the session can't wedge on
+        // its own logging no matter how chatty FreeRDP gets.
+        let logURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("freerdp-\(UUID().uuidString).log")
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        let errHandle = try? FileHandle(forWritingTo: logURL)
+
         let stdin = Pipe()
-        let errPipe = Pipe()
         process.standardInput = stdin
         process.standardOutput = FileHandle.nullDevice
-        process.standardError = errPipe
+        process.standardError = errHandle ?? FileHandle.nullDevice
 
-        // Drain stderr continuously (so a long session never blocks on a full
-        // pipe), keeping only the tail for diagnostics.
-        let collector = OutputCollector()
-        errPipe.fileHandleForReading.readabilityHandler = { fh in
-            let d = fh.availableData
-            if !d.isEmpty { collector.append(d) }
-        }
-
-        let started = Date()
         process.terminationHandler = { proc in
-            errPipe.fileHandleForReading.readabilityHandler = nil
-            guard let onEarlyFailure,
-                  proc.terminationStatus != 0,
-                  Date().timeIntervalSince(started) < 12 else { return }
-            let msg = friendlyError(status: proc.terminationStatus, stderr: collector.text())
-            DispatchQueue.main.async { onEarlyFailure(msg) }
+            try? errHandle?.close()
+            let crashed = proc.terminationReason == .uncaughtSignal
+            let failed = proc.terminationStatus != 0
+            if let onExitError, crashed || failed {
+                let stderrText = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+                let msg = friendlyError(reason: proc.terminationReason,
+                                        status: proc.terminationStatus,
+                                        stderr: stderrText)
+                DispatchQueue.main.async { onExitError(msg) }
+            }
+            try? FileManager.default.removeItem(at: logURL)
         }
 
         do {
             try process.run()
         } catch {
+            try? errHandle?.close()
+            try? FileManager.default.removeItem(at: logURL)
             throw LaunchError.spawnFailed(error.localizedDescription)
         }
 
@@ -162,10 +170,14 @@ enum SessionLauncher {
         return process
     }
 
-    /// Turn a FreeRDP exit code + stderr tail into a short, useful message.
-    static func friendlyError(status: Int32, stderr: String) -> String {
+    /// Turn a FreeRDP termination (exit code or crash signal) + stderr tail into
+    /// a short, useful message.
+    static func friendlyError(reason: Process.TerminationReason,
+                              status: Int32, stderr: String) -> String {
         let s = stderr.uppercased()
-        var headline = "The remote session closed unexpectedly (exit code \(status))."
+        var headline = reason == .uncaughtSignal
+            ? "FreeRDP crashed (signal \(status))."
+            : "The remote session closed unexpectedly (exit code \(status))."
         if s.contains("LOGON_FAILURE") || s.contains("NO_CREDENTIALS")
             || s.contains("SAM DATABASE") || s.contains("AUTHENTICATION FAILURE") {
             headline = "Authentication failed — check the username and password."
@@ -181,26 +193,8 @@ enum SessionLauncher {
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .suffix(12)
+            .suffix(25)
             .joined(separator: "\n")
         return tail.isEmpty ? headline : "\(headline)\n\n\(tail)"
-    }
-}
-
-/// Thread-safe, size-capped accumulator for a process's stderr tail.
-private final class OutputCollector {
-    private let lock = NSLock()
-    private var data = Data()
-    private let cap = 16_384
-
-    func append(_ d: Data) {
-        lock.lock(); defer { lock.unlock() }
-        data.append(d)
-        if data.count > cap { data.removeFirst(data.count - cap) }
-    }
-
-    func text() -> String {
-        lock.lock(); defer { lock.unlock() }
-        return String(decoding: data, as: UTF8.self)
     }
 }
