@@ -46,9 +46,44 @@ struct ContentView: View {
         }
         .toolbar { toolbarContent }
         .sheet(isPresented: $askPassword) { passwordSheet }
-        .alert("FreeRDP error", isPresented: .constant(errorText != nil)) {
-            Button("OK") { errorText = nil }
-        } message: { Text(errorText ?? "") }
+        .sheet(isPresented: Binding(get: { errorText != nil },
+                                    set: { if !$0 { errorText = nil } })) { errorSheet }
+    }
+
+    // Fixed-size, scrollable error window. The long FreeRDP log scrolls inside,
+    // so the dismiss controls can never end up off-screen (an alert grew with
+    // the log text and pushed its button past the screen edge).
+    private var errorSheet: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label("FreeRDP error", systemImage: "exclamationmark.triangle.fill")
+                    .font(.headline).foregroundStyle(.orange)
+                Spacer()
+                Button { errorText = nil } label: {
+                    Image(systemName: "xmark.circle.fill").font(.title2)
+                }
+                .buttonStyle(.plain)
+                .help("Close")
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+            Divider()
+            ScrollView {
+                Text(errorText ?? "")
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+            Divider()
+            HStack {
+                Spacer()
+                Button("Close") { errorText = nil }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(12)
+        }
+        .frame(width: 560, height: 420)
     }
 
     // MARK: Sidebar
