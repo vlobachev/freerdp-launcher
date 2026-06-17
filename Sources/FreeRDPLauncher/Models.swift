@@ -123,10 +123,16 @@ struct Connection: Codable, Identifiable, Hashable {
     var clipboard = true
     var microphone = false
     var ignoreCert = true
-    /// Auto-reconnect after a transient transport drop (jittery WiFi / VPN /
-    /// tunnel) instead of ending the session. Maps to FreeRDP
+    /// Auto-reconnect after a transient transport drop. Maps to FreeRDP
     /// `/auto-reconnect /auto-reconnect-max-retries:N`.
-    var autoReconnect = true
+    ///
+    /// OFF by default: with gnome-remote-desktop's headless remote login the
+    /// session is reached via RDP ServerRedirection (a routing token + handover
+    /// to a headless GDM/user session). FreeRDP's own reconnect cookies fight
+    /// that redirect — on any blip the client re-enters at the system daemon
+    /// with a stale token and loops through redirects, which looks like a
+    /// "freeze". Leave off for grd; only enable for plain RDP hosts on flaky links.
+    var autoReconnect = false
     var autoReconnectMaxRetries = 20
     var extraFlags = ""
 
