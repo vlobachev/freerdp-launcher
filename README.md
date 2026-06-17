@@ -1,92 +1,95 @@
 # FreeRDP Launcher
 
-A tiny native macOS GUI front-end and connection manager for
-[FreeRDP](https://www.freerdp.com/) (`sdl-freerdp`).
+A small native **SwiftUI** macOS app — a connection manager that launches
+[FreeRDP](https://www.freerdp.com/) (`sdl-freerdp`) sessions.
 
 ## Why
 
 Microsoft's **Windows App** / **Remote Desktop** client on macOS fails NLA
 authentication against some RDP servers — most notably
-[`gnome-remote-desktop`](https://gitlab.gnome.org/GNOME/gnome-remote-desktop),
-which returns **error 0x207** (NTLM "Message Integrity Check" failure).
-**FreeRDP** authenticates correctly against those same servers, but on macOS it
-ships only a command-line client (`sdl-freerdp`).
+[`gnome-remote-desktop`](https://gitlab.gnome.org/GNOME/gnome-remote-desktop)
+(**error 0x207**, NTLM "Message Integrity Check" failure). **FreeRDP**
+authenticates correctly, but on macOS it ships only a command-line client.
 
-This app wraps `sdl-freerdp` in a clickable connection manager: pick a saved
-connection, type the password, and the FreeRDP window opens. No 14-day trials,
-no Microsoft client, just a small AppleScript app over the binary you already
-have from Homebrew.
+FreeRDP Launcher gives that client a proper home: a persistent window with a
+sidebar of saved connections, inline add/edit, passwords in the macOS Keychain,
+and one-click connect. No 14-day trials, no Microsoft client.
+
+## Features
+
+- Native macOS app (SwiftUI), single persistent manager window.
+- Saved connections with sidebar + detail layout; inline add/edit (no modal chains).
+- Passwords stored in the **macOS Keychain**, never in plaintext.
+- Password is passed to FreeRDP via `/args-from:stdin`, so it never appears in
+  `ps` / the process list.
+- First-class **resolution & scaling** controls (the usual pain point on Retina).
+- Launch multiple sessions; the manager stays open.
+- Graceful "FreeRDP not installed" handling.
 
 ## Requirements
 
-- macOS
-- [Homebrew](https://brew.sh) FreeRDP:
-  ```sh
-  brew install freerdp
-  ```
+- macOS 14 (Sonoma) or later
+- [Homebrew](https://brew.sh) FreeRDP: `brew install freerdp`
+- To build: the Swift toolchain (Xcode **or** the Command Line Tools — `swift` on `PATH`)
 
-## Install
+## Build & install
 
 ```sh
-git clone https://github.com/<you>/freerdp-launcher.git
+git clone https://github.com/vlobachev/freerdp-launcher.git
 cd freerdp-launcher
-./build.sh                 # builds & installs to /Applications
-# or install elsewhere:
-./build.sh ~/Applications
+./build.sh /Applications      # builds and installs "FreeRDP Launcher.app"
+# or just build into ./dist:
+./build.sh
 ```
 
-Then launch **FreeRDP Launcher** from Spotlight / Launchpad / the Dock.
+It's an unsigned local build, so on first launch macOS Gatekeeper may complain —
+right-click the app → **Open**, or run
+`xattr -dr com.apple.quarantine "/Applications/FreeRDP Launcher.app"`.
 
 ## Usage
 
-1. Launch the app.
-2. First run: choose **“+ Add connection…”** and enter a name, host, username,
-   and (optionally) extra FreeRDP flags.
-3. Pick a saved connection, type the password (hidden, never stored), choose
-   **Window** or **Fullscreen**, and connect.
+1. Launch **FreeRDP Launcher**.
+2. Click **+**, fill in Name / Host / Username / Password and the Display options,
+   **Save**.
+3. Select the connection and hit **Connect** (or press ⏎). The remote desktop
+   opens in FreeRDP's own window; the manager stays open.
 
 In fullscreen, **Ctrl + Alt + Enter** toggles back to a window.
 
-## Connection profiles
+## Getting crisp, large text (Retina)
 
-Profiles are stored in a plain TAB-separated file you can also edit by hand
-(the app's **“✎ Edit connections file…”** entry opens it):
+The remote desktop looks blurry/small when the server renders at a low
+resolution and macOS upscales it on a Retina display. The fix is two-sided:
 
-```
-~/.config/freerdp-launcher/connections.tsv
-```
+1. **Client (this app):** set the connection's resolution to your Mac's *native*
+   pixel size (e.g. `2560 × 1600`) so FreeRDP carries pixels 1:1 — no upscaling.
+2. **Server (GNOME):** make the UI physically larger by scaling GNOME, which
+   renders text as crisp vectors. On the remote machine, as your user:
+   ```sh
+   gsettings set org.gnome.desktop.interface scaling-factor 2
+   # optional finer text bump:
+   gsettings set org.gnome.desktop.interface text-scaling-factor 1.1
+   ```
 
-Format — one connection per line, fields separated by a TAB; lines starting
-with `#` are ignored:
+Prefer **server-side** (GNOME) scaling over client-side stretching for the
+sharpest result; don't do both at once.
 
-```
-name<TAB>host<TAB>user<TAB>extra_flags
-```
+## Connection storage
 
-Example:
-
-```
-Work desktop	10.0.0.50	alice	/sound:sys:mac
-Home GNOME box	gnomebox.lan	bob	+microphone
-```
-
-`extra_flags` is passed verbatim to `sdl-freerdp`, so anything from
-`sdl-freerdp /help` works (audio, drives, gateway, etc.).
-
-No hosts, usernames, or passwords are baked into the app — everything lives in
-your local config file, and passwords are only ever typed at connect time.
+- Connections: `~/Library/Application Support/FreeRDP Launcher/connections.json`
+  (no passwords — those live in the Keychain).
+- On first run the app imports any legacy
+  `~/.config/freerdp-launcher/connections.tsv` from earlier versions.
 
 ## How it works
 
-The app is a small AppleScript that:
+The app is a SwiftUI connection manager. It does **not** re-implement RDP
+rendering — that's `sdl-freerdp`'s job. The app finds the FreeRDP binary
+(`/opt/homebrew/bin/sdl-freerdp` and friends), builds the argument list from the
+connection's settings, and spawns it detached, feeding all arguments (including
+the password) through `/args-from:stdin`.
 
-1. locates `sdl-freerdp` (falls back to `sdl-freerdp3` / `xfreerdp`),
-2. reads connection profiles from `connections.tsv`,
-3. shows native macOS dialogs to pick a connection and enter the password,
-4. launches `sdl-freerdp` detached with sensible defaults
-   (`/cert:ignore`, clipboard, dynamic resolution, audio).
-
-See [`src/FreeRDP Launcher.applescript`](src/FreeRDP%20Launcher.applescript).
+See [`docs/`](docs/) for the architecture notes.
 
 ## License
 

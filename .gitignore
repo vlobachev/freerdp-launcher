@@ -1,4 +1,6 @@
-# Build output
+# Swift / SwiftPM
+.build/
+dist/
 *.app/
 
 # macOS

@@ -1,0 +1,101 @@
+import SwiftUI
+
+/// Inline add/edit form shown in the detail pane (never a separate window).
+struct ConnectionEditView: View {
+    @State var connection: Connection
+    let isNew: Bool
+    var onSave: (Connection) -> Void
+    var onCancel: () -> Void
+
+    @State private var password = ""
+    @State private var showAdvanced = false
+
+    private var canSave: Bool {
+        !connection.name.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !connection.host.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(isNew ? "New Connection" : "Edit Connection")
+                    .font(.title2).bold()
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Save") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSave)
+                    .keyboardShortcut("s", modifiers: .command)
+            }
+            .padding(.bottom, 8)
+
+            Form {
+                Section {
+                    TextField("Name", text: $connection.name)
+                    TextField("Host (IP or hostname)", text: $connection.host)
+                    TextField("Port", value: $connection.port, format: .number.grouping(.never))
+                    TextField("Username", text: $connection.username)
+                    SecureField(isNew ? "Password" : "Password (leave blank to keep)", text: $password)
+                    Toggle("Save password to Keychain", isOn: $connection.savePassword)
+                }
+
+                Section("Display") {
+                    Picker("Resolution", selection: $connection.display) {
+                        ForEach(DisplayMode.allCases) { Text($0.label).tag($0) }
+                    }
+                    if connection.display == .fixed {
+                        Picker("Size", selection: sizeBinding) {
+                            ForEach(SizePreset.presets) { Text($0.label).tag($0.id) }
+                        }
+                    }
+                    Picker("Make text bigger (scaling)", selection: $connection.scale) {
+                        ForEach(Connection.scaleOptions, id: \.self) { Text("\($0)%").tag($0) }
+                    }
+                    Text("Tip: for the sharpest, biggest text, pick your Mac’s native resolution here and also set GNOME scaling on the server (see README).")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Toggle("Shared clipboard", isOn: $connection.clipboard)
+                    Picker("Audio", selection: $connection.audio) {
+                        ForEach(AudioMode.allCases) { Text($0.label).tag($0) }
+                    }
+                    Toggle("Forward microphone", isOn: $connection.microphone)
+                    Toggle("Ignore server certificate (LAN)", isOn: $connection.ignoreCert)
+                }
+
+                Section {
+                    DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+                        TextField("Extra FreeRDP flags", text: $connection.extraFlags)
+                        Text("Passed verbatim to FreeRDP, space-separated (e.g. /gfx:RFX +fonts).")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+        }
+        .padding(20)
+    }
+
+    private var sizeBinding: Binding<String> {
+        Binding(
+            get: { "\(connection.width)x\(connection.height)" },
+            set: { newID in
+                if let p = SizePreset.presets.first(where: { $0.id == newID }) {
+                    connection.width = p.width
+                    connection.height = p.height
+                }
+            }
+        )
+    }
+
+    private func save() {
+        var c = connection
+        c.name = c.name.trimmingCharacters(in: .whitespaces)
+        c.host = c.host.trimmingCharacters(in: .whitespaces)
+        if !password.isEmpty && c.savePassword {
+            Keychain.save(password: password, for: c.id)
+        }
+        onSave(c)
+    }
+}
