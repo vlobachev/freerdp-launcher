@@ -62,6 +62,11 @@ struct ConnectionEditView: View {
                     Picker("Audio", selection: $connection.audio) {
                         ForEach(AudioMode.allCases) { Text($0.label).tag($0) }
                     }
+                    if connection.audio == .local {
+                        Picker("Audio buffer", selection: $connection.audioLatency) {
+                            ForEach(AudioLatency.allCases) { Text($0.label).tag($0) }
+                        }
+                    }
                     Toggle("Forward microphone", isOn: $connection.microphone)
                     Toggle("Ignore server certificate (LAN)", isOn: $connection.ignoreCert)
                 }

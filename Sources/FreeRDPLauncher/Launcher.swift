@@ -76,8 +76,14 @@ enum SessionLauncher {
         if c.scale != 100 { a.append("/scale:\(c.scale)") }
 
         switch c.audio {
-        case .off: a.append("-sound")
-        case .local: a.append("/sound:sys:mac")
+        case .off:
+            a.append("-sound")
+        case .local:
+            // A larger jitter buffer (latency:) smooths audio drop-outs on
+            // tunneled / VPN links at the cost of a little extra delay.
+            var snd = "/sound:sys:mac"
+            if c.audioLatency != .off { snd += ",latency:\(c.audioLatency.rawValue)" }
+            a.append(snd)
         }
         a.append(c.clipboard ? "+clipboard" : "-clipboard")
         if c.microphone { a.append("+microphone") }

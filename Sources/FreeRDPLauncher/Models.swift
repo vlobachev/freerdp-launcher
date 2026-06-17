@@ -63,6 +63,24 @@ enum AudioMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Audio jitter buffer (FreeRDP `/sound:...,latency:` in ms). A larger buffer
+/// smooths out audio drop-outs on jittery links (e.g. VPN / tunneled RDP) at
+/// the cost of a little extra audio delay.
+enum AudioLatency: Int, Codable, CaseIterable, Identifiable {
+    case off = 0
+    case low = 80
+    case smooth = 200
+
+    var id: Int { rawValue }
+    var label: String {
+        switch self {
+        case .off: return "Off — lowest delay"
+        case .low: return "Low buffer (80 ms)"
+        case .smooth: return "Smooth (200 ms, recommended)"
+        }
+    }
+}
+
 /// A common fixed resolution preset.
 struct SizePreset: Identifiable, Hashable {
     let width: Int
@@ -100,6 +118,8 @@ struct Connection: Codable, Identifiable, Hashable {
 
     var graphics: GraphicsMode = .auto
     var audio: AudioMode = .local
+    /// Jitter buffer for redirected audio. Default smooths tunneled links.
+    var audioLatency: AudioLatency = .smooth
     var clipboard = true
     var microphone = false
     var ignoreCert = true
@@ -117,7 +137,7 @@ struct Connection: Codable, Identifiable, Hashable {
 extension Connection {
     enum CodingKeys: String, CodingKey {
         case id, name, host, port, username, domain, display, width, height
-        case scale, graphics, audio, clipboard, microphone, ignoreCert
+        case scale, graphics, audio, audioLatency, clipboard, microphone, ignoreCert
         case extraFlags, savePassword, lastUsed
     }
 
@@ -136,6 +156,7 @@ extension Connection {
         scale = try c.decodeIfPresent(Int.self, forKey: .scale) ?? scale
         graphics = try c.decodeIfPresent(GraphicsMode.self, forKey: .graphics) ?? graphics
         audio = try c.decodeIfPresent(AudioMode.self, forKey: .audio) ?? audio
+        audioLatency = try c.decodeIfPresent(AudioLatency.self, forKey: .audioLatency) ?? audioLatency
         clipboard = try c.decodeIfPresent(Bool.self, forKey: .clipboard) ?? clipboard
         microphone = try c.decodeIfPresent(Bool.self, forKey: .microphone) ?? microphone
         ignoreCert = try c.decodeIfPresent(Bool.self, forKey: .ignoreCert) ?? ignoreCert
