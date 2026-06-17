@@ -89,7 +89,10 @@ rendering — that's `sdl-freerdp`'s job. The app finds the FreeRDP binary
 connection's settings, and spawns it detached, feeding all arguments (including
 the password) through `/args-from:stdin`.
 
-See [`docs/`](docs/) for the architecture notes.
+See [`docs/`](docs/) for the architecture notes, and
+[`docs/proxmox-ubuntu-gnome-rdp.md`](docs/proxmox-ubuntu-gnome-rdp.md) for a
+full field guide to running a GPU-accelerated GNOME desktop over RDP on a
+Proxmox LXC (the setup this app was built for).
 
 ## License
 
