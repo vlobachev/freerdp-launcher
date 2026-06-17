@@ -8,3 +8,7 @@ dist/
 
 # Local connection profiles (never commit hosts/credentials)
 connections.tsv
+
+# Local agent worktrees / IDE
+.claude/
+.idea/
