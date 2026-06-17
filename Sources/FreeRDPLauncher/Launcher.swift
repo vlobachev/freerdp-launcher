@@ -67,7 +67,6 @@ enum SessionLauncher {
         switch c.display {
         case .fullscreen:
             a.append("+f")
-            a.append("/dynamic-resolution")
         case .dynamic:
             a.append("/dynamic-resolution")
         case .fixed:

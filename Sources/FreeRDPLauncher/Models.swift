@@ -9,8 +9,8 @@ enum DisplayMode: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .dynamic: return "Dynamic (resize freely)"
-        case .fullscreen: return "Fullscreen"
+        case .dynamic: return "Dynamic — resizable (recommended)"
+        case .fullscreen: return "Fullscreen (+f, can be slow)"
         case .fixed: return "Fixed size"
         }
     }
