@@ -90,11 +90,13 @@ struct Connection: Codable, Identifiable, Hashable {
     var username = ""
     var domain = ""
 
-    var display: DisplayMode = .fixed
+    var display: DisplayMode = .dynamic
     var width = 2560
     var height = 1440
     /// FreeRDP `/scale:` DPI hint. Only 100, 140, 180 are accepted by FreeRDP.
-    var scale = 140
+    /// Default 100 (no flag) — a forced /scale crashes some gnome-remote-desktop
+    /// sessions right after connect. Use GNOME-side scaling for bigger text.
+    var scale = 100
 
     var graphics: GraphicsMode = .auto
     var audio: AudioMode = .local
