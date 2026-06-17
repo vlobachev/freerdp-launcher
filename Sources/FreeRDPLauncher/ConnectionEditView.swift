@@ -51,7 +51,10 @@ struct ConnectionEditView: View {
                     Picker("Make text bigger (scaling)", selection: $connection.scale) {
                         ForEach(Connection.scaleOptions, id: \.self) { Text("\($0)%").tag($0) }
                     }
-                    Text("Tip: for the sharpest, biggest text, pick your Mac’s native resolution here and also set GNOME scaling on the server (see README).")
+                    Picker("Graphics codec", selection: $connection.graphics) {
+                        ForEach(GraphicsMode.allCases) { Text($0.label).tag($0) }
+                    }
+                    Text("Tip: leave the codec on Automatic if the session crashes after the login screen. For the sharpest, biggest text, pick your Mac’s native resolution here and also set GNOME scaling on the server (see README).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 

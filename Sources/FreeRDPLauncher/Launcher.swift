@@ -83,9 +83,10 @@ enum SessionLauncher {
         a.append(c.clipboard ? "+clipboard" : "-clipboard")
         if c.microphone { a.append("+microphone") }
 
-        // High-quality graphics + LAN tuning for crisp text.
-        a.append("/gfx:AVC444")
-        a.append("/network:lan")
+        // Graphics codec. Default ("Automatic") passes nothing and lets FreeRDP
+        // negotiate — forcing a codec (e.g. AVC444) can crash some software-
+        // rendered gnome-remote-desktop sessions right after the login screen.
+        if let gfx = c.graphics.flag { a.append(gfx) }
 
         // Extra user flags (whitespace-separated).
         for tok in c.extraFlags.split(whereSeparator: { $0 == " " || $0 == "\t" }) {
