@@ -123,6 +123,11 @@ struct Connection: Codable, Identifiable, Hashable {
     var clipboard = true
     var microphone = false
     var ignoreCert = true
+    /// Auto-reconnect after a transient transport drop (jittery WiFi / VPN /
+    /// tunnel) instead of ending the session. Maps to FreeRDP
+    /// `/auto-reconnect /auto-reconnect-max-retries:N`.
+    var autoReconnect = true
+    var autoReconnectMaxRetries = 20
     var extraFlags = ""
 
     var savePassword = true
@@ -138,6 +143,7 @@ extension Connection {
     enum CodingKeys: String, CodingKey {
         case id, name, host, port, username, domain, display, width, height
         case scale, graphics, audio, audioLatency, clipboard, microphone, ignoreCert
+        case autoReconnect, autoReconnectMaxRetries
         case extraFlags, savePassword, lastUsed
     }
 
@@ -160,6 +166,8 @@ extension Connection {
         clipboard = try c.decodeIfPresent(Bool.self, forKey: .clipboard) ?? clipboard
         microphone = try c.decodeIfPresent(Bool.self, forKey: .microphone) ?? microphone
         ignoreCert = try c.decodeIfPresent(Bool.self, forKey: .ignoreCert) ?? ignoreCert
+        autoReconnect = try c.decodeIfPresent(Bool.self, forKey: .autoReconnect) ?? autoReconnect
+        autoReconnectMaxRetries = try c.decodeIfPresent(Int.self, forKey: .autoReconnectMaxRetries) ?? autoReconnectMaxRetries
         extraFlags = try c.decodeIfPresent(String.self, forKey: .extraFlags) ?? extraFlags
         savePassword = try c.decodeIfPresent(Bool.self, forKey: .savePassword) ?? savePassword
         lastUsed = try c.decodeIfPresent(Date.self, forKey: .lastUsed) ?? lastUsed

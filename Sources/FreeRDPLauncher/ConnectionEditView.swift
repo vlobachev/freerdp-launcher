@@ -69,6 +69,11 @@ struct ConnectionEditView: View {
                     }
                     Toggle("Forward microphone", isOn: $connection.microphone)
                     Toggle("Ignore server certificate (LAN)", isOn: $connection.ignoreCert)
+                    Toggle("Auto-reconnect on dropped connection", isOn: $connection.autoReconnect)
+                    if connection.autoReconnect {
+                        Stepper("Max reconnect retries: \(connection.autoReconnectMaxRetries)",
+                                value: $connection.autoReconnectMaxRetries, in: 1...50)
+                    }
                 }
 
                 Section("Advanced") {

@@ -88,6 +88,13 @@ enum SessionLauncher {
         a.append(c.clipboard ? "+clipboard" : "-clipboard")
         if c.microphone { a.append("+microphone") }
 
+        // Survive transient transport drops (jittery WiFi / VPN / tunnel) by
+        // reconnecting instead of ending the session.
+        if c.autoReconnect {
+            a.append("/auto-reconnect")
+            a.append("/auto-reconnect-max-retries:\(c.autoReconnectMaxRetries)")
+        }
+
         // Graphics codec. Default ("Automatic") passes nothing and lets FreeRDP
         // negotiate — forcing a codec (e.g. AVC444) can crash some software-
         // rendered gnome-remote-desktop sessions right after the login screen.
