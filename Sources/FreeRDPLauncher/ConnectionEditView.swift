@@ -8,7 +8,6 @@ struct ConnectionEditView: View {
     var onCancel: () -> Void
 
     @State private var password = ""
-    @State private var showAdvanced = false
 
     private var canSave: Bool {
         !connection.name.trimmingCharacters(in: .whitespaces).isEmpty &&
@@ -67,12 +66,14 @@ struct ConnectionEditView: View {
                     Toggle("Ignore server certificate (LAN)", isOn: $connection.ignoreCert)
                 }
 
-                Section {
-                    DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
-                        TextField("Extra FreeRDP flags", text: $connection.extraFlags)
-                        Text("Passed verbatim to FreeRDP, space-separated (e.g. /gfx:RFX +fonts).")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                Section("Advanced") {
+                    TextField("Extra FreeRDP flags",
+                              text: $connection.extraFlags,
+                              prompt: Text("e.g. /gfx:RFX +fonts /drive:home,/Users/me"))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                    Text("Passed verbatim to FreeRDP, space-separated.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
