@@ -18,7 +18,9 @@ on run
 	do shell script "mkdir -p " & quoted form of cfgDir & " && touch " & quoted form of cfgFile
 
 	-- Locate a FreeRDP binary (prefer the SDL client, fall back to xfreerdp).
-	set rdpBin to (do shell script "command -v sdl-freerdp 2>/dev/null || command -v sdl-freerdp3 2>/dev/null || command -v xfreerdp 2>/dev/null || true")
+	-- `do shell script` runs with a minimal PATH, so include the Homebrew dirs
+	-- (Apple Silicon + Intel) explicitly.
+	set rdpBin to (do shell script "PATH=/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/sbin:/usr/local/sbin:$PATH; command -v sdl-freerdp 2>/dev/null || command -v sdl-freerdp3 2>/dev/null || command -v xfreerdp 2>/dev/null || true")
 	if rdpBin is "" then
 		display dialog "FreeRDP is not installed." & return & return & "Install it with Homebrew:" & return & "    brew install freerdp" with title appTitle buttons {"OK"} default button "OK" with icon stop
 		return
