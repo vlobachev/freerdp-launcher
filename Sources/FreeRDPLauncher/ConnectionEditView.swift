@@ -72,11 +72,13 @@ struct ConnectionEditView: View {
                               prompt: Text("e.g. /gfx:RFX +fonts /drive:home,/Users/me"))
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
+                        .multilineTextAlignment(.leading)
                     Text("Passed verbatim to FreeRDP, space-separated.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
+            .multilineTextAlignment(.leading)
         }
         .padding(20)
     }
