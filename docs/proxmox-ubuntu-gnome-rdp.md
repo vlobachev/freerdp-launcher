@@ -44,10 +44,14 @@ dev1: /dev/dri/renderD128,gid=104
 
 Inside the **container**:
 
-- Install GNOME + `gnome-remote-desktop` + **gdm3**.
+- Install the **Ubuntu** desktop + `ubuntu-session`/`ubuntu-settings` + grd +
+  **gdm3** — but pin `snapd` out and get Firefox from Mozilla's apt repo, or the
+  Firefox-snap transitional hangs apt for ~50 min.
 - Make **gdm3** the display manager (NOT lightdm). grd's remote-login backend
   will not even bind its RDP port without gdm running.
-- Configure grd in **system** mode (file-based credentials, no keyring).
+- Set the user's **default session to `ubuntu`** (else a bare GNOME top bar).
+- Configure grd in **system** mode (file credentials, no keyring) and
+  **generate its TLS cert** (grd doesn't auto-create one).
 
 On the **client**:
 
@@ -115,18 +119,39 @@ ls -l /dev/dri            # card0 + renderD128 present
 
 ## Step 3 — Install the desktop (inside the container)
 
+**Do not** install `ubuntu-desktop-minimal`. The meta pulls the `firefox`
+transitional deb, whose preinst installs the Firefox **snap** — and in a
+container that can't reach the snap store it retries for ~50 minutes and wedges
+the entire apt run. Block snap and install a curated GNOME set plus the Ubuntu
+session bits directly:
+
 ```sh
+# Keep snap out so apt never stalls on the store:
+printf 'Package: snapd\nPin: release *\nPin-Priority: -1\n' \
+  > /etc/apt/preferences.d/99-no-snap
+
 apt update
-apt install -y ubuntu-desktop-minimal gnome-remote-desktop gdm3
-# Optional but recommended for a usable desktop:
-apt install -y gnome-shell-extension-ubuntu-dock \
-               gnome-shell-extension-appindicator gnome-tweaks
+apt install -y \
+  gnome-shell gnome-session gdm3 gnome-control-center gnome-terminal nautilus \
+  gnome-remote-desktop gnome-tweaks \
+  ubuntu-session ubuntu-settings ubuntu-wallpapers \
+  gnome-shell-extension-ubuntu-dock gnome-shell-extension-appindicator \
+  yaru-theme-gtk yaru-theme-icon yaru-theme-gnome-shell fonts-ubuntu openssl
 ```
 
-GNOME 4x+ on Ubuntu is **Wayland-only** — there is no Xorg GNOME session to
-serve over a classic X11 RDP/VNC bridge. grd's Wayland headless backend is the
+`ubuntu-session` + `ubuntu-settings` are what give the **real Ubuntu look**
+(Yaru theme + the Ubuntu dock configured the Ubuntu way). Plain GNOME without
+them — even with the dock extension installed — is just a bare top bar.
+
+GNOME on Ubuntu is **Wayland-only** — there is no Xorg GNOME session to serve
+over a classic X11 RDP/VNC bridge. grd's Wayland headless backend is the
 supported path, and it needs a real **seat** (`seat0`) and a display manager,
 which is why gdm matters next.
+
+**Browsers** — install from the vendors' apt repos, not snap: Google Chrome
+from `dl.google.com/linux/chrome/deb`, and Firefox from Mozilla's repo
+(`packages.mozilla.org/apt`, pinned above the Ubuntu transitional) — the
+Mozilla `firefox` is a real .deb that never touches the snap store.
 
 ## Step 4 — Make gdm3 the display manager (inside the container)
 
@@ -150,6 +175,24 @@ AutomaticLoginEnable=true
 AutomaticLogin=<USERNAME>
 ```
 
+### Default the user to the Ubuntu session
+
+grd's remote-login launches the user's **AccountsService default session**. If
+that's plain `gnome` you get a bare top bar even with `ubuntu-session` installed.
+Pin it to `ubuntu`:
+
+```sh
+cat >/var/lib/AccountsService/users/<USERNAME> <<'EOF'
+[User]
+Session=ubuntu
+XSession=ubuntu
+SystemAccount=false
+EOF
+```
+
+If a reconnect keeps reusing a cached plain-GNOME session, terminate it so a
+fresh one launches the Ubuntu session: `loginctl terminate-user <USERNAME>`.
+
 ## Step 5 — Configure grd in system mode (inside the container)
 
 System mode stores credentials in a file (`/etc/gnome-remote-desktop/`), so it
@@ -157,10 +200,16 @@ works **headless** — no login keyring to unlock (the keyring is the reason
 user/headless mode fails on auto-login boxes).
 
 ```sh
-# TLS cert/key (grd generates them; make sure grd owns them):
-chown gnome-remote-desktop:gnome-remote-desktop \
-      /etc/gnome-remote-desktop/rdp-tls.crt \
-      /etc/gnome-remote-desktop/rdp-tls.key
+# grd does NOT auto-generate its RDP TLS cert. Generate a self-signed pair,
+# give grd ownership, and point grd at it — otherwise grd logs "RDP TLS
+# certificate and key not yet configured properly" and never binds the port.
+openssl req -x509 -newkey rsa:4096 -days 3650 -nodes -subj "/CN=desktop" \
+  -out /etc/gnome-remote-desktop/rdp-tls.crt \
+  -keyout /etc/gnome-remote-desktop/rdp-tls.key
+chown gnome-remote-desktop:gnome-remote-desktop /etc/gnome-remote-desktop/rdp-tls.{crt,key}
+chmod 640 /etc/gnome-remote-desktop/rdp-tls.key
+grdctl --system rdp set-tls-cert /etc/gnome-remote-desktop/rdp-tls.crt
+grdctl --system rdp set-tls-key  /etc/gnome-remote-desktop/rdp-tls.key
 
 # Credentials — pass the password on stdin, never as a CLI argument:
 printf '%s' "<PASSWORD>" | grdctl --system rdp set-credentials <USERNAME>
@@ -193,9 +242,10 @@ Use **FreeRDP Launcher** (this app) or `sdl-freerdp` directly:
 - **Audio:** "Play on this Mac"; bump the **Audio buffer** if sound stutters on a
   tunneled/VPN link.
 
-On first login the desktop looks bare (just the top bar) — that is stock GNOME.
-Press **Super** / use the top-left hot-corner for the Activities overview, or
-enable the **Ubuntu Dock** extension for a permanent dock.
+You should land in the **Ubuntu** session (Yaru theme + the dock). If instead
+it's a bare wallpaper + top bar, the session is plain GNOME — fix the default
+session ([Step 4](#step-4--make-gdm3-the-display-manager-inside-the-container)).
+**Super** / the top-left hot-corner opens the Activities overview.
 
 ---
 
@@ -209,9 +259,10 @@ enable the **Ubuntu Dock** extension for a permanent dock.
 | `gnome-remote-desktop-handover.service: ... status=6/ABRT`, `Failed to mount FUSE filesystem` | `/dev/fuse` missing in the container | `features: ...,fuse=1` + reboot ([Step 1](#step-1--create-the-container-proxmox-host)) |
 | Still SIGABRT with `/dev/fuse` present; host dmesg shows `apparmor="DENIED" ... profile="fusermount3" ... denied="send"` | AppArmor blocks the FUSE fd handoff in an unprivileged LXC | `lxc.apparmor.profile: unconfined` ([Step 2](#step-2--apparmor--gpu-proxmox-host)) |
 | Session works but **scrolling is no smoother than a VM** | RDP isn't using the GPU H.264 encoder | Set client codec to **AVC420** ([Step 6](#step-6--connect-from-the-client)); confirm with `cat /sys/class/drm/cardN/device/gpu_busy_percent` while interacting |
-| `RDP TLS certificate and key not yet configured properly` | grd can't read its cert/key | `chown gnome-remote-desktop:` the `rdp-tls.*` files ([Step 5](#step-5--configure-grd-in-system-mode-inside-the-container)) |
+| grd is `active` + `enabled` but **never binds** the port; log says `RDP TLS certificate and key not yet configured properly` | grd does **not** auto-generate a TLS cert | Generate a self-signed pair and `grdctl --system rdp set-tls-cert/set-tls-key` ([Step 5](#step-5--configure-grd-in-system-mode-inside-the-container)) |
 | RDP login keyring won't unlock headless (user/headless grd mode) | auto-login doesn't unlock the GNOME keyring | Use grd **system** mode (file credentials) instead |
-| Desktop is empty, only a clock | Stock GNOME has no dock by default | Install/enable `ubuntu-dock` + `appindicator` extensions |
+| `apt` hangs ~50 min on `Installing the firefox snap` / `Unable to contact the store` | `ubuntu-desktop-minimal` pulls the Firefox **snap** transitional; the preinst retries the unreachable store | Pin `snapd` out + set up the Mozilla apt repo **before** the desktop install ([Step 3](#step-3--install-the-desktop-inside-the-container)) |
+| Desktop is wallpaper + top bar, **no dock**, even with `ubuntu-dock` installed | the session is plain GNOME, not Ubuntu | Install `ubuntu-session`/`ubuntu-settings` + set the AccountsService default session to `ubuntu` ([Step 4](#step-4--make-gdm3-the-display-manager-inside-the-container)); `loginctl terminate-user` any cached GNOME session |
 | Audio stutters | Jitter on a tunneled/VPN link, or PipeWire xruns in the headless session | Increase the client audio buffer (latency); audio over tunneled RDP is inherently the weakest link |
 
 ---

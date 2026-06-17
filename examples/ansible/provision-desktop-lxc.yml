@@ -1,0 +1,97 @@
+---
+# ════════════════════════════════════════════════════════════════════
+# Provision the unprivileged GNOME desktop LXC on your Proxmox host.
+#
+# Creates an unprivileged Ubuntu LXC wired for gnome-remote-desktop with GPU
+# passthrough. The three non-obvious requirements (all learned the hard way —
+# see docs/proxmox-ubuntu-gnome-rdp.md in the freerdp-launcher repo):
+#
+#   1. features=fuse=1   — grd's clipboard mounts FUSE; the session daemon
+#                          SIGABRTs without /dev/fuse.
+#   2. apparmor=unconfined — even with /dev/fuse, AppArmor denies fusermount3
+#                          the FUSE fd handoff in an unprivileged LXC, and the
+#                          grd handover daemon aborts. Unconfined fixes it
+#                          while keeping the container unprivileged.
+#   3. /dev/dri passthrough — the whole point: GPU render + H.264 encode.
+#
+# Run with the static inventory (same as the other provision-*-lxc playbooks):
+#     ansible-playbook -i inventory/hosts.yaml provision-desktop-lxc.yml
+#
+# Then install the desktop:  ansible-playbook desktop.yml -l desktop
+#
+# Re-running is safe: an existing CT is skipped (guarded by `pct status`);
+# device + apparmor settings are applied idempotently.
+# ════════════════════════════════════════════════════════════════════
+- name: Provision GNOME desktop LXC
+  hosts: proxmox
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - name: Stage the owner SSH public key for pct --ssh-public-keys
+      ansible.builtin.copy:
+        dest: /root/.ansible-provision-authorized_keys
+        content: "{{ provision_ssh_authorized_key }}\n"
+        mode: '0600'
+
+    - name: Ensure the Ubuntu LXC template is present on the Proxmox host
+      ansible.builtin.command:
+        cmd: "pveam download {{ desktop_lxc_template_storage }} {{ desktop_lxc_template_name }}"
+        creates: "/var/lib/vz/template/cache/{{ desktop_lxc_template_name }}"
+      register: template_dl
+      changed_when: "'downloaded' in (template_dl.stdout | default(''))"
+
+    - name: Check whether the container already exists
+      ansible.builtin.command: "pct status {{ desktop_ctid }}"
+      register: pct_status
+      changed_when: false
+      failed_when: false
+
+    - name: Create the desktop LXC
+      # fuse=1 + keyctl=1 on top of nesting=1. apparmor + devices are applied
+      # in the following tasks (no pct create flags for them).
+      ansible.builtin.command:
+        cmd: >-
+          pct create {{ desktop_ctid }}
+          {{ desktop_lxc_template_storage }}:vztmpl/{{ desktop_lxc_template_name }}
+          --hostname {{ desktop_hostname }}
+          --ostype ubuntu
+          --rootfs {{ desktop_lxc_rootfs_storage }}:{{ desktop_lxc_disk }}
+          --cores {{ desktop_lxc_cores }}
+          --memory {{ desktop_lxc_memory }}
+          --swap {{ desktop_lxc_swap }}
+          --onboot 1
+          --unprivileged 1
+          --features nesting=1,keyctl=1,fuse=1
+          --net0 name=eth0,bridge={{ desktop_lxc_bridge }},firewall=0,gw={{ desktop_lxc_gateway }},hwaddr={{ desktop_lxc_hwaddr }},ip={{ desktop_ip }}/{{ desktop_lxc_cidr }},type=veth
+          --ssh-public-keys /root/.ansible-provision-authorized_keys
+      when: pct_status.rc != 0       # `pct status` non-zero == container missing
+      changed_when: true
+
+    - name: Pass through GPU + input devices
+      ansible.builtin.command: "pct set {{ desktop_ctid }} --{{ item }}"
+      loop: "{{ desktop_dev_passthrough }}"
+      register: dev_set
+      changed_when: true
+
+    - name: Set AppArmor to unconfined (required for FUSE in an unprivileged LXC)
+      ansible.builtin.lineinfile:
+        path: "/etc/pve/lxc/{{ desktop_ctid }}.conf"
+        line: "lxc.apparmor.profile: unconfined"
+        regexp: '^lxc\.apparmor\.profile:'
+        state: present
+
+    - name: Start the desktop LXC
+      ansible.builtin.command: "pct start {{ desktop_ctid }}"
+      register: pct_start
+      changed_when: true
+      failed_when: pct_start.rc != 0 and 'already running' not in (pct_start.stderr | default(''))
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >
+          Provisioned desktop LXC {{ desktop_ctid }} ({{ desktop_name }}, {{ desktop_ip }}).
+          Next: `ansible-playbook desktop.yml -l desktop` to install GNOME + grd + Sunshine.

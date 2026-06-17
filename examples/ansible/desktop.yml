@@ -1,0 +1,337 @@
+---
+# ════════════════════════════════════════════════════════════════════
+# Install + configure the GNOME remote desktop inside the desktop LXC.
+#
+# Run AFTER provision-desktop-lxc.yml, once the CT answers SSH:
+#     ansible-playbook desktop.yml -l desktop
+#
+# What it does:
+#   • installs GNOME (Wayland) + ubuntu-session/ubuntu-settings (the real Ubuntu
+#     look: Yaru + Ubuntu dock) + gnome-remote-desktop + gdm3
+#   • makes gdm3 the display manager (grd's remote-login backend will NOT bind
+#     its RDP port unless gdm is the running DM — not lightdm)
+#   • sets the user's default session to "ubuntu" (grd launches the
+#     AccountsService default — plain GNOME otherwise looks bare)
+#   • optional gdm auto-login; no auto-lock/idle (remote desktop)
+#   • Google Chrome + Firefox (Mozilla apt repo, not the snap) + Sunshine
+#   • grd in SYSTEM mode (file credentials — no keyring to unlock headless),
+#     self-signed TLS cert, bound to the standard RDP port
+#
+# Connect from the FreeRDP Launcher app; set the codec to AVC420 for GPU encode.
+# Full background + gotchas: freerdp-launcher → docs/proxmox-ubuntu-gnome-rdp.md
+#
+# RDP PASSWORD is NOT stored in this repo. Either pass it once at run time:
+#     ansible-playbook desktop.yml -l desktop -e desktop_rdp_password='…'
+# (handled with no_log, fed to grdctl on stdin — never on the CLI), or leave it
+# out and set it manually afterwards (the play prints the exact command).
+# ════════════════════════════════════════════════════════════════════
+- name: Configure GNOME remote desktop
+  hosts: desktop
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - vars.yml
+
+  handlers:
+    - name: dconf update
+      ansible.builtin.command: dconf update
+      changed_when: false
+
+  tasks:
+    # ── Keep snap out ───────────────────────────────────────────────
+    # The Ubuntu `firefox` deb is a transitional package whose preinst installs
+    # the Firefox *snap*; in a container that can't reach the snap store it
+    # retries for ~50 min and wedges apt. We pin snapd out and (below) set up the
+    # Mozilla apt repo BEFORE the desktop install, so the meta's firefox recommend
+    # resolves to Mozilla's real .deb instead of the snap.
+    - name: Pin snapd out of apt
+      ansible.builtin.copy:
+        dest: /etc/apt/preferences.d/99-no-snap
+        mode: '0644'
+        content: |
+          Package: snapd
+          Pin: release *
+          Pin-Priority: -1
+
+          Package: gnome-software-plugin-snap
+          Pin: release *
+          Pin-Priority: -1
+
+    # ── Browser apt repos — set up BEFORE the desktop meta, so its `firefox`
+    #    recommend resolves to Mozilla's real .deb (pinned below) instead of the
+    #    hang-prone snap transitional. ──
+    - name: Chrome — signing key
+      ansible.builtin.get_url:
+        url: https://dl.google.com/linux/linux_signing_key.pub
+        dest: /etc/apt/keyrings/google-chrome.asc
+        mode: '0644'
+      when: desktop_install_chrome | bool
+
+    - name: Chrome — apt repo
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.asc] http://dl.google.com/linux/chrome/deb/ stable main"
+        filename: google-chrome
+        state: present
+      when: desktop_install_chrome | bool
+
+    - name: Firefox — Mozilla signing key
+      ansible.builtin.get_url:
+        url: https://packages.mozilla.org/apt/repo-signing-key.gpg
+        dest: /etc/apt/keyrings/packages.mozilla.org.asc
+        mode: '0644'
+      when: desktop_install_firefox | bool
+
+    - name: Firefox — Mozilla apt repo
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main"
+        filename: mozilla
+        state: present
+      when: desktop_install_firefox | bool
+
+    - name: Firefox — prefer Mozilla's build over the Ubuntu snap transitional
+      ansible.builtin.copy:
+        dest: /etc/apt/preferences.d/mozilla
+        mode: '0644'
+        content: |
+          Package: *
+          Pin: origin packages.mozilla.org
+          Pin-Priority: 1000
+      when: desktop_install_firefox | bool
+
+    # ── Desktop — the full Ubuntu desktop (Yaru + Ubuntu dock + Settings panels).
+    #    Safe now: snapd is pinned out and `firefox` resolves to the Mozilla .deb,
+    #    so the meta no longer drags in the hang-prone Firefox snap. ──
+    - name: Install Ubuntu desktop, gnome-remote-desktop, gdm3 + tools
+      ansible.builtin.apt:
+        name:
+          - ubuntu-desktop-minimal
+          - gnome-remote-desktop
+          - gdm3
+          - gnome-tweaks
+          - gnome-shell-extension-ubuntu-dock
+          - gnome-shell-extension-appindicator
+          - curl
+          - ca-certificates
+          - gpg
+          - openssl
+        state: present
+        update_cache: true
+        install_recommends: true
+      register: desktop_pkgs
+
+    # ── Desktop user ────────────────────────────────────────────────
+    - name: Ensure the desktop user exists (GPU/audio/sudo groups)
+      ansible.builtin.user:
+        name: "{{ desktop_user }}"
+        groups: sudo,video,render,audio,input
+        append: true
+        shell: /bin/bash
+        create_home: true
+
+    # ── gdm3 as the display manager (critical for grd remote-login) ──
+    - name: Make gdm3 the default display manager
+      ansible.builtin.copy:
+        dest: /etc/X11/default-display-manager
+        content: "/usr/sbin/gdm3\n"
+        mode: '0644'
+
+    - name: Disable lightdm if it sneaked in
+      ansible.builtin.systemd:
+        name: lightdm.service
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Enable gdm3
+      ansible.builtin.systemd:
+        name: gdm3.service
+        enabled: true
+
+    - name: Configure gdm auto-login
+      ansible.builtin.copy:
+        dest: /etc/gdm3/custom.conf
+        mode: '0644'
+        content: |
+          # Managed by Ansible (desktop.yml)
+          [daemon]
+          AutomaticLoginEnable={{ 'true' if desktop_autologin else 'false' }}
+          AutomaticLogin={{ desktop_user if desktop_autologin else '' }}
+
+          [security]
+
+          [debug]
+
+    # Make the user's default session the "ubuntu" one (Yaru + Ubuntu dock),
+    # not plain GNOME — grd's remote-login launches the AccountsService default.
+    - name: Set the desktop user's default session to ubuntu
+      ansible.builtin.copy:
+        dest: "/var/lib/AccountsService/users/{{ desktop_user }}"
+        mode: '0644'
+        content: |
+          [User]
+          Session=ubuntu
+          XSession=ubuntu
+          SystemAccount=false
+
+    # ── GNOME extensions system-wide (dock + indicators) ────────────
+    # The remote-login GNOME session is plain upstream GNOME (bare top bar)
+    # unless we set a system dconf default enabling the Ubuntu extensions.
+    - name: Create dconf system profile
+      ansible.builtin.copy:
+        dest: /etc/dconf/profile/user
+        mode: '0644'
+        content: |
+          user-db:user
+          system-db:local
+
+    - name: Ensure dconf db dir exists
+      ansible.builtin.file:
+        path: /etc/dconf/db/local.d
+        state: directory
+        mode: '0755'
+
+    - name: dconf default — enable GNOME extensions
+      # GVariant accepts JSON-style double-quoted strings, so to_json yields a
+      # valid array literal: ["ubuntu-dock@ubuntu.com", "ubuntu-appindicators@…"]
+      ansible.builtin.copy:
+        dest: /etc/dconf/db/local.d/00-extensions
+        mode: '0644'
+        content: |
+          [org/gnome/shell]
+          enabled-extensions={{ desktop_gnome_extensions | to_json }}
+      notify: dconf update
+
+    - name: dconf default — no auto-lock / idle (remote desktop)
+      ansible.builtin.copy:
+        dest: /etc/dconf/db/local.d/01-no-lock
+        mode: '0644'
+        content: |
+          [org/gnome/desktop/screensaver]
+          lock-enabled=false
+
+          [org/gnome/desktop/session]
+          idle-delay=uint32 0
+
+          [org/gnome/settings-daemon/plugins/power]
+          sleep-inactive-ac-type='nothing'
+      notify: dconf update
+
+    # ── Browsers (apt repos were configured before the desktop install) ──
+    - name: Chrome — install
+      ansible.builtin.apt:
+        name: google-chrome-stable
+        state: present
+        update_cache: true
+      when: desktop_install_chrome | bool
+
+    - name: Firefox — install
+      ansible.builtin.apt:
+        name: firefox
+        state: present
+        update_cache: true
+      when: desktop_install_firefox | bool
+
+    # ── Sunshine game-streaming (best-effort) ───────────────────────
+    - name: Sunshine — install from upstream .deb
+      when: desktop_install_sunshine | bool
+      block:
+        - name: Sunshine — fetch latest release .deb
+          ansible.builtin.shell: |
+            set -o pipefail
+            url=$(curl -fsSL https://api.github.com/repos/LizardByte/Sunshine/releases/latest \
+                  | grep -oE '"browser_download_url": *"[^"]*ubuntu-[0-9.]+-amd64\.deb"' \
+                  | grep -oE 'https://[^"]+' | sort -V | tail -1)
+            echo "$url"
+            curl -fsSL "$url" -o /tmp/sunshine.deb
+          args:
+            executable: /bin/bash
+          register: sunshine_dl
+          changed_when: true
+
+        - name: Sunshine — install the .deb
+          ansible.builtin.apt:
+            deb: /tmp/sunshine.deb
+            state: present
+      rescue:
+        - name: Sunshine — note failure (non-fatal)
+          ansible.builtin.debug:
+            msg: "Sunshine install failed (no matching .deb for this Ubuntu?). Skipping; the GNOME-over-RDP desktop is unaffected."
+
+    # ── gnome-remote-desktop (system mode) ──────────────────────────
+    # grd does NOT auto-generate its RDP TLS cert — without one it logs
+    # "RDP TLS certificate and key not yet configured properly" and never
+    # binds the port. Generate a self-signed pair and point grd at it.
+    - name: grd — generate self-signed RDP TLS cert/key
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -newkey rsa:4096 -days 3650 -nodes
+          -subj "/CN={{ desktop_hostname }}"
+          -out /etc/gnome-remote-desktop/rdp-tls.crt
+          -keyout /etc/gnome-remote-desktop/rdp-tls.key
+        creates: /etc/gnome-remote-desktop/rdp-tls.crt
+
+    - name: grd — own + protect the TLS cert/key
+      ansible.builtin.file:
+        path: "/etc/gnome-remote-desktop/{{ item.f }}"
+        owner: gnome-remote-desktop
+        group: gnome-remote-desktop
+        mode: "{{ item.m }}"
+      loop:
+        - { f: rdp-tls.crt, m: '0644' }
+        - { f: rdp-tls.key, m: '0640' }
+
+    - name: grd — point at the TLS cert/key
+      ansible.builtin.command: "grdctl --system rdp {{ item }}"
+      loop:
+        - "set-tls-cert /etc/gnome-remote-desktop/rdp-tls.crt"
+        - "set-tls-key /etc/gnome-remote-desktop/rdp-tls.key"
+      changed_when: true
+
+    - name: grd — set RDP port
+      ansible.builtin.command: "grdctl --system rdp set-port {{ desktop_rdp_port }}"
+      changed_when: true
+
+    - name: grd — enable RDP backend
+      ansible.builtin.command: grdctl --system rdp enable
+      changed_when: true
+
+    # Credentials: pass via stdin (never on the CLI), only if provided.
+    - name: grd — set credentials (only when a password is provided)
+      ansible.builtin.command:
+        cmd: "grdctl --system rdp set-credentials {{ desktop_user }}"
+        stdin: "{{ desktop_rdp_password }}"
+      no_log: true
+      changed_when: true
+      when: desktop_rdp_password is defined and desktop_rdp_password | length > 0
+
+    - name: grd — enable the system service
+      ansible.builtin.systemd:
+        name: gnome-remote-desktop.service
+        enabled: true
+
+    # ── Wrap up ─────────────────────────────────────────────────────
+    - name: Reboot to apply display-manager switch + extensions
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+
+    - name: Verify grd is listening on the RDP port
+      ansible.builtin.shell: "ss -ltn | grep -q ':{{ desktop_rdp_port }}'"
+      register: grd_listen
+      changed_when: false
+      failed_when: false
+      retries: 6
+      delay: 5
+      until: grd_listen.rc == 0
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >-
+          desktop ({{ desktop_ip }}:{{ desktop_rdp_port }}) ready —
+          gdm={{ 'on' }}, grd listening={{ grd_listen.rc == 0 }}.
+          {% if desktop_rdp_password is not defined %}
+          SET THE RDP PASSWORD (not stored in repo):
+            printf '%s' '<password>' | ssh root@{{ desktop_ip }} grdctl --system rdp set-credentials {{ desktop_user }}
+          (and `passwd {{ desktop_user }}` for local/sudo login).
+          {% endif %}
+          Connect with FreeRDP Launcher, codec AVC420, for GPU-accelerated GNOME.

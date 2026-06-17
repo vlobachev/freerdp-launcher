@@ -1,0 +1,46 @@
+---
+# Copy to vars.yml and fill in. Nothing here is real — all placeholders.
+
+# ── LXC identity ────────────────────────────────────────────────────
+desktop_ctid: "<CTID>"                 # e.g. 130 (convention: == IP last octet)
+desktop_name: desktop
+desktop_hostname: desktop
+desktop_ip: "<CONTAINER_IP>"           # e.g. 10.0.0.130
+desktop_lxc_cidr: 24
+desktop_lxc_gateway: "<GATEWAY>"       # e.g. 10.0.0.1
+desktop_lxc_bridge: vmbr0
+# Optional: pin a stable MAC so a recreate keeps the same identity/lease.
+# desktop_lxc_hwaddr: "BC:24:11:xx:xx:xx"
+
+# ── LXC shape ───────────────────────────────────────────────────────
+desktop_lxc_cores: 8
+desktop_lxc_memory: 8192               # MB
+desktop_lxc_swap: 2048
+desktop_lxc_disk: 64                   # GB
+desktop_lxc_rootfs_storage: "<ROOTFS_STORAGE>"     # e.g. local-zfs
+desktop_lxc_template_storage: "<TEMPLATE_STORAGE>" # e.g. local
+desktop_lxc_template_name: "ubuntu-<VERSION>-standard_<...>_amd64.tar.zst"
+
+# ── GPU / input passthrough ─────────────────────────────────────────
+# `pct set --devN`. gid= is the IN-CONTAINER group that owns the node under the
+# unprivileged userns mapping. Find the right minors + gids with `ls -l /dev/dri`
+# on the host and match the container's render/video groups.
+desktop_dev_passthrough:
+  - "dev0=/dev/dri/renderD128,gid=<RENDER_GID>"   # e.g. 993 / 104 / 992 …
+  - "dev1=/dev/dri/card0,gid=<VIDEO_GID>"         # e.g. 44
+  - "dev2=/dev/uinput,gid=<INPUT_GID>,mode=0660"  # for Sunshine virtual input
+
+# ── Desktop / RDP knobs ─────────────────────────────────────────────
+desktop_user: "<USERNAME>"             # e.g. youruser
+desktop_rdp_port: 3389
+desktop_autologin: true
+desktop_install_sunshine: true
+desktop_install_chrome: true
+desktop_install_firefox: true
+
+desktop_gnome_extensions:
+  - "ubuntu-dock@ubuntu.com"
+  - "ubuntu-appindicators@ubuntu.com"
+
+# Injected as root authorized_keys into the new CT (define in inventory or here):
+# provision_ssh_authorized_key: "ssh-ed25519 AAAA... you@host"
