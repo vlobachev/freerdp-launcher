@@ -1,0 +1,11 @@
+# FreeRDP Launcher — example connection profiles.
+# Copy to ~/.config/freerdp-launcher/connections.tsv and edit, or just add
+# connections from inside the app ("+ Add connection…").
+#
+# One connection per line. Fields are separated by a TAB character.
+# Columns:  name <TAB> host <TAB> user <TAB> extra_flags
+# Lines starting with "#" are ignored. extra_flags is optional.
+#
+# Examples (replace with your own hosts):
+Work desktop	10.0.0.50	alice	/sound:sys:mac
+Home GNOME box	gnomebox.lan	bob	+microphone

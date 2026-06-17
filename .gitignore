@@ -1,0 +1,8 @@
+# Build output
+*.app/
+
+# macOS
+.DS_Store
+
+# Local connection profiles (never commit hosts/credentials)
+connections.tsv
